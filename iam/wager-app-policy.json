@@ -1,0 +1,23 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ConsumeWagerRequests",
+      "Effect": "Allow",
+      "Action": ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"],
+      "Resource": "arn:aws:sqs:REGION:ACCOUNT_ID:wager-transactions.fifo"
+    },
+    {
+      "Sid": "PublishIntegrationEvents",
+      "Effect": "Allow",
+      "Action": ["sqs:SendMessage"],
+      "Resource": "arn:aws:sqs:REGION:ACCOUNT_ID:wager-events"
+    },
+    {
+      "Sid": "AuditDeadLetters",
+      "Effect": "Allow",
+      "Action": ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"],
+      "Resource": "arn:aws:sqs:REGION:ACCOUNT_ID:wager-transactions-dlq.fifo"
+    }
+  ]
+}

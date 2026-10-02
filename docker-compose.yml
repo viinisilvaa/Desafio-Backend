@@ -1,0 +1,109 @@
+services:
+  postgres:
+    image: postgres:17.2-alpine
+    environment:
+      POSTGRES_DB: wager
+      POSTGRES_USER: ${POSTGRES_USER:-wager}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-wager-local-only}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wager} -d wager"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin-local-only}
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_HOSTNAME: http://keycloak:8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./keycloak/realm.json:/opt/keycloak/data/import/wager-realm.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/9000'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+
+  localstack:
+    image: localstack/localstack:3.8.1
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./localstack/init:/etc/localstack/init/ready.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal sqs list-queues >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+  app:
+    build: .
+    environment:
+      HTTP_ADDR: ":8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-wager}:${POSTGRES_PASSWORD:-wager-local-only}@postgres:5432/wager?sslmode=disable
+      OIDC_ISSUER_URL: http://keycloak:8080/realms/wager
+      OIDC_AUDIENCE: wager-api
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      AWS_ENDPOINT_URL: http://localstack:4566
+      SQS_REQUEST_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions.fifo
+      SQS_EVENT_QUEUE_URL: http://localstack:4566/000000000000/wager-events
+      SQS_DLQ_QUEUE_URL: http://localstack:4566/000000000000/wager-transactions-dlq.fifo
+    ports:
+      - "8082:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    restart: unless-stopped
+
+  integration-tests:
+    image: golang:1.23.4
+    profiles: ["integration"]
+    working_dir: /workspace
+    command: ["go", "test", "-race", "-count=1", "-run", "^(TestOIDCAndHTTPToSQSIdempotency|TestIndependentProcessorsPreserveWalletInvariants|TestThreeIndependentProcessesCompeteForWallet|TestDLQAuditFailsOnlyMatchingPendingWager|TestOutboxRecoversAfterPublishBeforeDatabaseAck)$", "./internal/app"]
+    environment:
+      TEST_DATABASE_URL: postgres://${POSTGRES_USER:-wager}:${POSTGRES_PASSWORD:-wager-local-only}@postgres:5432/wager?sslmode=disable
+      TEST_OIDC_ISSUER_URL: http://keycloak:8080/realms/wager
+      TEST_OIDC_AUDIENCE: wager-api
+      TEST_PROVIDER_CLIENT_ID: wager-provider-a
+      TEST_PROVIDER_CLIENT_SECRET: provider-a-local-secret
+      TEST_INTERNAL_CLIENT_ID: wager-internal
+      TEST_INTERNAL_CLIENT_SECRET: internal-local-secret
+      TEST_SQS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    volumes:
+      - .:/workspace:ro
+      - go-module-cache:/go/pkg/mod
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  go-module-cache:

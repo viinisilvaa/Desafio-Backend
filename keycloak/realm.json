@@ -1,0 +1,120 @@
+{
+  "realm": "wager",
+  "enabled": true,
+  "displayName": "Wager local development",
+  "roles": {
+    "realm": [
+      { "name": "wallet-admin", "description": "Permite operações internas de carteira" },
+      { "name": "wager-provider", "description": "Permite operações do provedor autenticado" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "wager-api",
+      "name": "Wager API audience",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "bearerOnly": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    },
+    {
+      "clientId": "wager-provider-a",
+      "name": "Local provider A",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "provider-a-local-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "provider-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": { "claim.name": "provider_id", "claim.value": "provider-a", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+        },
+        {
+          "name": "wager-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "wager-api", "id.token.claim": "false", "access.token.claim": "true" }
+        }
+      ]
+    },
+    {
+      "clientId": "wager-provider-b",
+      "name": "Local provider B",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "provider-b-local-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "provider-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": { "claim.name": "provider_id", "claim.value": "provider-b", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+        },
+        {
+          "name": "wager-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "wager-api", "id.token.claim": "false", "access.token.claim": "true" }
+        }
+      ]
+    },
+    {
+      "clientId": "wager-internal",
+      "name": "Internal wallet service",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "internal-local-secret",
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "provider-id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-hardcoded-claim-mapper",
+          "config": { "claim.name": "provider_id", "claim.value": "internal", "jsonType.label": "String", "access.token.claim": "true", "id.token.claim": "false" }
+        },
+        {
+          "name": "wager-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": { "included.client.audience": "wager-api", "id.token.claim": "false", "access.token.claim": "true" }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-wager-internal",
+      "enabled": true,
+      "serviceAccountClientId": "wager-internal",
+      "realmRoles": ["wallet-admin"]
+    },
+    {
+      "username": "service-account-wager-provider-a",
+      "enabled": true,
+      "serviceAccountClientId": "wager-provider-a",
+      "realmRoles": ["wager-provider"]
+    },
+    {
+      "username": "service-account-wager-provider-b",
+      "enabled": true,
+      "serviceAccountClientId": "wager-provider-b",
+      "realmRoles": ["wager-provider"]
+    }
+  ]
+}
