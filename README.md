@@ -127,6 +127,53 @@ Uma chamada repetida com os mesmos dados retorna o resultado original. Uma chave
 - `GET /wagering/transactions/{transactionID}`: consulta pelo identificador interno
 - `GET /health/live`, `GET /health/ready` e `GET /metrics`: liveness, readiness e métricas
 
+## Consumidor SQS
+
+Ao iniciar, o LocalStack executa `localstack/init/10-create-queues.sh` e provisiona `wager-transactions.fifo`, `wager-transactions-dlq.fifo` e `wager-events`. A fila de transações usa redrive para a DLQ após cinco recebimentos sem confirmação; mensagens válidas são removidas somente depois do commit no PostgreSQL. Mensagens inválidas ou com falha transitória ficam na fila para nova tentativa.
+
+O corpo da mensagem deve seguir este envelope. Use `PLAYER_ID` e `WALLET_ID` de uma carteira existente, como a criada no exemplo HTTP acima:
+
+```json
+{
+  "messageId": "msg-123",
+  "type": "WagerTransactionRequested",
+  "occurredAt": "2026-09-08T12:00:00.000Z",
+  "data": {
+    "providerId": "provider-a",
+    "externalTransactionId": "transaction-123",
+    "idempotencyKey": "provider-a:transaction-123",
+    "playerId": "PLAYER_ID",
+    "walletId": "WALLET_ID",
+    "roundId": "round-987",
+    "gameId": "fortune-chimp",
+    "kind": "BET",
+    "money": { "amount": "25.00", "currency": "BRL" }
+  }
+}
+```
+
+Para publicar a mensagem no LocalStack, gere IDs novos e envie à fila com os atributos obrigatórios de FIFO. A carteira deve ter saldo suficiente para o débito:
+
+```sh
+MESSAGE_ID=$(uuidgen)
+EXTERNAL_ID=$(uuidgen)
+ENVELOPE=$(jq -n \
+  --arg messageId "$MESSAGE_ID" \
+  --arg occurredAt "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" \
+  --arg playerId "$PLAYER_ID" \
+  --arg walletId "$WALLET_ID" \
+  --arg externalId "$EXTERNAL_ID" \
+  '{messageId:$messageId,type:"WagerTransactionRequested",occurredAt:$occurredAt,data:{providerId:"provider-a",externalTransactionId:$externalId,idempotencyKey:("provider-a:" + $externalId),playerId:$playerId,walletId:$walletId,roundId:"round-987",gameId:"fortune-chimp",kind:"BET",money:{amount:"25.00",currency:"BRL"}}}')
+
+docker compose exec localstack awslocal sqs send-message \
+  --queue-url http://localhost:4566/000000000000/wager-transactions.fifo \
+  --message-body "$ENVELOPE" \
+  --message-group-id "$WALLET_ID" \
+  --message-deduplication-id "$MESSAGE_ID"
+```
+
+O consumidor verifica o tipo e o timestamp do envelope, valida a transação e usa `(consumer, messageId)` junto ao hash do corpo para deduplicar. `MessageGroupId` preserva a ordem por carteira; `MessageDeduplicationId` é obrigatório porque a fila não usa deduplicação baseada no conteúdo.
+
 ## Migrações
 
 O container da aplicação aplica automaticamente as migrações pendentes ao iniciar. Para operar manualmente, com o serviço em execução:
