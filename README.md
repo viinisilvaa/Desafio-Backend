@@ -176,14 +176,20 @@ O consumidor verifica o tipo e o timestamp do envelope, valida a transação e u
 
 ## Migrações
 
-O container da aplicação aplica automaticamente as migrações pendentes ao iniciar. Para operar manualmente, com o serviço em execução:
+O container da aplicação aplica automaticamente as migrações pendentes ao iniciar. Para aplicar manualmente enquanto PostgreSQL estiver disponível:
 
 ```sh
 docker compose exec app migrate up
-docker compose exec app migrate down
 ```
 
-`migrate down` reverte somente a migração mais recente. A migração inicial remove objetos do schema; faça backup antes de reverter dados que precisem ser preservados.
+Para reverter, pare primeiro a aplicação e rode o migrador como um container de uso único:
+
+```sh
+docker compose stop app
+docker compose run --rm --no-deps --entrypoint migrate app down
+```
+
+`migrate down` reverte somente a migração mais recente. A migração inicial remove objetos do schema; faça backup antes de reverter dados que precisem ser preservados. Para voltar a executar a aplicação depois do rollback, use `docker compose up --build -d app`; o entrypoint aplicará novamente as migrações pendentes.
 
 ## Testes e qualidade
 
