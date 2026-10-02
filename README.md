@@ -1,164 +1,182 @@
 # Wager Service
 
-## Visão geral
+Serviço HTTP em Go para processar transações de apostas e movimentações de carteira. O projeto prioriza consistência financeira, idempotência, concorrência segura e processamento assíncrono resiliente.
 
-O Wager Service é uma aplicação em Go para processar transações de apostas e carteira com foco em consistência financeira, concorrência segura e idempotência. O sistema foi desenhado para manter invariantes de saldo, registrar todas as movimentações em um ledger append-only e garantir que eventos e mensagens não causem duplicações ou inconsistências em cenários reais de produção.
+## Tecnologias
 
-A implementação combina PostgreSQL para persistência transacional, fila SQS para integração assíncrona e autenticação OIDC para autorização por provedor e role interna.
+- Go 1.23 ou superior
+- PostgreSQL 17
+- AWS SQS (LocalStack no ambiente local)
+- Keycloak e OpenID Connect
+- Uber Fx para composição e ciclo de vida
 
-## Objetivos do projeto
+## Componentes
 
-- manutenir saldo da carteira consistente sob concorrência
-- impedir reprocessamento duplicado de transações
-- registrar cada operação em ledger imutável
-- suportar transações de aposta, ganho, reembolso e rollback
-- publicar eventos de negócio com outbox para garantir entrega confiável
-- lidar com filas e DLQ com auditoria e recuperação de falhas
-- permitir autenticação e autorização de clientes externos e internos
+- `internal/domain`: valores monetários e regras de transação e carteira
+- `internal/app`: casos de uso, API HTTP, autenticação, filas e workers
+- `cmd/wager-service`: composição e inicialização do serviço
+- `cmd/migrate` e `migrations`: aplicação e reversão do schema
+- `keycloak/realm.json`: realm local com clients e roles de teste
+- `localstack/init`: criação automática das filas SQS locais
 
-## Stack técnica
+As decisões, invariantes, interpretações e limitações estão em [ARCHITECTURE.md](ARCHITECTURE.md).
 
-- Language: Go 1.23+
-- Database: PostgreSQL
-- Messaging: AWS SQS via SDK v2
-- Auth: OIDC / Keycloak
-- Runtime: Uber Fx
-- Tests: Go testing
+## Pré-requisitos
 
-## Arquitetura
+- Docker com o plugin Docker Compose
+- Go 1.23+ para executar testes no host
+- `curl`, `jq` e `uuidgen` para seguir os exemplos HTTP
+- Um compilador C para `go test -race` no host; os testes integrados pelo Compose usam a imagem Go do serviço de teste
 
-O projeto segue uma separação clara entre domínio e infraestrutura:
+## Preparar e iniciar
 
-- `internal/domain`: regras do domínio, valores monetários, regras de carteira e transações
-- `internal/app`: casos de uso, adaptadores, processadores, workers e HTTP handlers
-- `cmd/wager-service`: composição da aplicação e lifecycle
-- `migrations`: schema do banco e controles de integridade
-
-Principais componentes:
-
-- `Processor`: núcleo de processamento financeiro
-- `HTTPServer`: API HTTP protegida por autenticação OIDC
-- `SQSConsumer`: consumo de mensagens de transações
-- `OutboxPublisher`: publicação de eventos de saída
-- `ReferenceWorker`: processamento de referências pendentes
-- `DLQAuditor`: auditoria e recuperação de mensagens em dead letter
-
-## Regras de negócio principais
-
-- Saldo e versão da carteira são atualizados dentro de uma mesma transação
-- Cada carteira tem uma chave única por jogador e moeda
-- A operação é idempotente por `(provider_id, idempotency_key)` e `(provider_id, external_transaction_id)`
-- O ledger é append-only e valida continuidade do saldo
-- Rejeições de negócio são persistidas com `failureCode` estável
-- Referências pendentes são processadas após retry e reprocessamento em background
-- Reversões seguem regras específicas de rollback, refund e validação do tipo da referência
-
-## APIs e contratos
-
-### HTTP
-
-A API fornece endpoints para:
-
-- criação de carteira
-- consulta de carteira
-- ledger e reconciliação
-- processamento de apostas
-- consulta de transações por provedor ou ID interno
-- health checks e métricas
-
-### Autenticação
-
-O serviço valida tokens OIDC e aplica regras de autorização por role:
-
-- `wallet-admin` para acesso interno a carteiras e reconciliação
-- `wager-provider` para processamento de transações por provedor
-
-## Execução local
-
-### Requisitos
-
-- Go 1.23+
-- Docker + Docker Compose (para cenário completo com PostgreSQL, Keycloak e LocalStack)
-- `curl`, `jq` e AWS CLI (opcionais para validação manual)
-
-### Testes locais
-
-Executar a suíte completa:
+Clone o repositório e entre na pasta do projeto. O arquivo `.env.example` contém somente valores locais de exemplo. O Compose tem os mesmos valores como padrão; copie o arquivo apenas se quiser configurar valores locais próprios:
 
 ```sh
-export PATH="/home/pc/Imagens/go1.27.1.linux-amd64/go/bin:$PATH"
-export CGO_ENABLED=0
-cd /home/pc/Documentos/Desafio
+cp .env.example .env
+docker compose up --build -d
+docker compose ps
+```
+
+Na inicialização, o LocalStack cria as filas de entrada, eventos e dead letter; o Keycloak importa o realm `wager`; e o container da aplicação executa `migrate up` antes de iniciar o serviço. A API fica em `http://localhost:8082` e o Keycloak em `http://localhost:8080`.
+
+Confirme a inicialização:
+
+```sh
+curl -i http://localhost:8082/health/live
+curl -i http://localhost:8082/health/ready
+```
+
+Para parar os serviços sem apagar os dados do PostgreSQL:
+
+```sh
+docker compose down
+```
+
+Para apagar também o volume local do banco e começar do zero:
+
+```sh
+docker compose down -v
+```
+
+Isso remove os dados persistidos localmente. Não use credenciais do `.env.example` fora de desenvolvimento.
+
+## Variáveis locais
+
+O Compose aceita estas variáveis, com os valores abaixo como padrão:
+
+| Variável | Padrão local | Uso |
+| --- | --- | --- |
+| `POSTGRES_USER` | `wager` | Usuário do PostgreSQL |
+| `POSTGRES_PASSWORD` | `wager-local-only` | Senha local do PostgreSQL |
+| `KEYCLOAK_ADMIN` | `admin` | Administrador local do Keycloak |
+| `KEYCLOAK_ADMIN_PASSWORD` | `admin-local-only` | Senha local do Keycloak |
+| `AWS_ACCESS_KEY_ID` | `test` | Credencial fictícia do LocalStack |
+| `AWS_SECRET_ACCESS_KEY` | `test` | Credencial fictícia do LocalStack |
+| `AWS_REGION` | `us-east-1` | Região usada pelo LocalStack e SDK |
+
+O serviço também pode ser configurado diretamente por `HTTP_ADDR`, `DATABASE_URL`, `OIDC_ISSUER_URL`, `OIDC_AUDIENCE`, `AWS_ENDPOINT_URL`, `SQS_REQUEST_QUEUE_URL`, `SQS_EVENT_QUEUE_URL` e `SQS_DLQ_QUEUE_URL`. Os endereços internos usados pelo Compose estão definidos em `docker-compose.yml`.
+
+## Autenticação e chamadas HTTP
+
+O realm local cria automaticamente os clients `wager-provider-a`, `wager-provider-b` e `wager-internal`, com credenciais locais declaradas em `keycloak/realm.json`. Os clients de provedor recebem a role `wager-provider`; o client interno recebe `wallet-admin`. O token é obtido pelo fluxo OAuth2 `client_credentials`:
+
+```sh
+BASE_URL=http://localhost:8082
+OIDC_URL=http://localhost:8080/realms/wager/protocol/openid-connect/token
+
+PROVIDER_TOKEN=$(curl -fsS "$OIDC_URL" \
+  -d grant_type=client_credentials \
+  -d client_id=wager-provider-a \
+  -d client_secret=provider-a-local-secret | jq -r .access_token)
+
+INTERNAL_TOKEN=$(curl -fsS "$OIDC_URL" \
+  -d grant_type=client_credentials \
+  -d client_id=wager-internal \
+  -d client_secret=internal-local-secret | jq -r .access_token)
+```
+
+Crie uma carteira usando o token interno e guarde os identificadores retornados:
+
+```sh
+PLAYER_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+WALLET=$(curl -fsS "$BASE_URL/wallets" \
+  -H "Authorization: Bearer $INTERNAL_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d "{\"playerId\":\"$PLAYER_ID\",\"initialBalance\":{\"amount\":\"100.00\",\"currency\":\"BRL\"}}")
+WALLET_ID=$(printf '%s' "$WALLET" | jq -r .id)
+```
+
+Envie uma aposta com o token do provedor. O `providerId` do corpo precisa corresponder ao `provider_id` do token; a chave de idempotência é obrigatória:
+
+```sh
+EXTERNAL_ID=$(uuidgen)
+curl -i "$BASE_URL/wagering/transactions" \
+  -H "Authorization: Bearer $PROVIDER_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H "Idempotency-Key: $EXTERNAL_ID" \
+  -d "{\"providerId\":\"provider-a\",\"externalTransactionId\":\"$EXTERNAL_ID\",\"playerId\":\"$PLAYER_ID\",\"walletId\":\"$WALLET_ID\",\"roundId\":\"round-1\",\"gameId\":\"game-1\",\"kind\":\"BET\",\"money\":{\"amount\":\"10.00\",\"currency\":\"BRL\"}}"
+```
+
+Uma chamada repetida com os mesmos dados retorna o resultado original. Uma chave reutilizada com dados diferentes é conflito. O serviço também oferece:
+
+- `GET /wallets/{walletID}`: consulta de carteira, role `wallet-admin`
+- `GET /wallets/{walletID}/ledger`: consulta paginada do ledger, role `wallet-admin`
+- `POST /wallets/{walletID}/reconciliation`: reconciliação, role `wallet-admin`
+- `GET /providers/{providerID}/wagering/transactions/{externalTransactionID}`: consulta restrita ao próprio provedor
+- `GET /wagering/transactions/{transactionID}`: consulta pelo identificador interno
+- `GET /health/live`, `GET /health/ready` e `GET /metrics`: liveness, readiness e métricas
+
+## Migrações
+
+O container da aplicação aplica automaticamente as migrações pendentes ao iniciar. Para operar manualmente, com o serviço em execução:
+
+```sh
+docker compose exec app migrate up
+docker compose exec app migrate down
+```
+
+`migrate down` reverte somente a migração mais recente. A migração inicial remove objetos do schema; faça backup antes de reverter dados que precisem ser preservados.
+
+## Testes e qualidade
+
+Na raiz do repositório, execute a suíte padrão e as verificações estáticas:
+
+```sh
 go test ./...
+go vet ./...
+gofmt -d $(git ls-files '*.go')
 ```
 
-Executar um pacote específico:
+`gofmt -d` não deve imprimir arquivos. Para formatar os arquivos Go do repositório, use `gofmt -w $(git ls-files '*.go')`. A suíte padrão inclui testes unitários; testes que dependem de PostgreSQL, Keycloak ou LocalStack são ignorados quando suas variáveis de integração não estão configuradas.
 
-```sh
-go test ./internal/app
-go test ./internal/domain
-```
-
-Execução com race detector (quando o compilador C estiver disponível):
+Para executar testes com o detector de corrida no host, instale também um compilador C:
 
 ```sh
 go test -race ./...
 ```
 
-## Execução com serviços externos
-
-Para rodar a infraestrutura completa com PostgreSQL, Keycloak e LocalStack:
+O teste de concorrência com um PostgreSQL local pode ser executado isoladamente:
 
 ```sh
-docker compose up --build
+docker compose up -d postgres
+TEST_DATABASE_URL='postgres://wager:wager-local-only@localhost:5432/wager?sslmode=disable' \
+  go test -race ./internal/app -run 'TestIndependentProcessorsPreserveWalletInvariants|TestThreeIndependentProcessesCompeteForWallet' -count=1
 ```
 
-Para testes de integração mais completos, incluindo cenários de concorrência e fila:
+Para os testes integrados com PostgreSQL, Keycloak e LocalStack reais, execute o profile dedicado:
 
 ```sh
 docker compose --profile integration run --rm integration-tests
 ```
 
-Para executar apenas o teste de concorrência do PostgreSQL:
+Esse comando inicia as dependências necessárias e executa os cenários de autenticação OIDC/HTTP/SQS e idempotência cruzada, concorrência entre pools e três processos Go independentes, auditoria de DLQ e recuperação da outbox após publicação sem confirmação no banco. Os próprios testes aplicam as migrações. Esse perfil testa falhas controladas nesses componentes; não é um teste de carga ou de implantação em AWS.
 
-```sh
-docker compose up -d postgres
-TEST_DATABASE_URL='postgres://wager:wager-local-only@localhost:5432/wager?sslmode=disable' \
-  go test -race ./internal/app -run TestIndependentProcessorsPreserveWalletInvariants -count=1
-```
+Não há build tags Go no projeto. Os testes integrados são selecionados pelo profile e pelos nomes de teste configurados em `docker-compose.yml`.
 
-## Health check e observabilidade
+## Limitações e escopo
 
-Os endpoints principais incluem:
-
-- `GET /health/live`
-- `GET /health/ready`
-- `GET /metrics`
-
-Esses endpoints permitem verificar disponibilidade do serviço e expor métricas de processamento, retries, DLQ, conflitos e outbox.
-
-## Validação
-
-A suíte local do projeto foi validada com sucesso no ambiente atual:
-
-```sh
-export PATH="/home/pc/Imagens/go1.27.1.linux-amd64/go/bin:$PATH"
-export CGO_ENABLED=0
-cd /home/pc/Documentos/Desafio
-go test ./...
-```
-
-Resultado verificado:
-
-- `ok` para `github.com/desafio/wager-service/cmd/wager-service`
-- `ok` para `github.com/desafio/wager-service/internal/app`
-- `ok` para `github.com/desafio/wager-service/internal/domain`
-
-## Considerações finais
-
-Este projeto demonstra uma implementação de serviço financeiro com foco em robustez operacional: limites transacionais, invariantes de negócio, processamento de mensagens resiliente e arquitetura pronta para evoluir em um ambiente de produção real.
-
-O código foi estruturado para evidenciar cuidado com consistência, segurança e qualidade de software, aspectos centrais para uma posição técnica em engenharia de backend e sistemas distribuídos.
+O serviço usa LocalStack para SQS localmente; a criação de IAM na AWS é responsabilidade do ambiente e a policy em `iam/wager-app-policy.json` é uma referência mínima. TLS público, armazenamento de secrets e configuração de produção do IdP não são provisionados por este repositório. O profile de integração não simula SIGTERM do serviço completo nem reinício do PostgreSQL; os limites e interpretações restantes estão detalhados em [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Referências
 

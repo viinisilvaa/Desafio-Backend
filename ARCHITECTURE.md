@@ -61,3 +61,12 @@ Logs JSON incluem IDs disponíveis sem payload financeiro ou credenciais. `/metr
 - Mensagens na DLQ são registradas em `dead_letter_messages` pelo hash e metadados mínimos. Uma wager pendente só transita para `FAILED` quando provider, ID externo e hash financeiro coincidem; mensagens inválidas, sem wager ou com payload conflitante ficam auditadas sem tocar no saldo. Não é emitido evento financeiro para `FAILED`.
 - O provisioning de política IAM gerenciada fica a cargo do ambiente AWS; o JSON fornecido é uma policy mínima de referência, não aplicada pelo LocalStack.
 - Os testes de integração dependem do profile Compose e de `TEST_DATABASE_URL`; sem os serviços, `go test ./...` executa os unitários e marca os cenários PostgreSQL/OIDC/SQS como skipped.
+
+## Interpretações e trabalho não concluído
+
+- Valores monetários recebidos pela API são strings decimais com exatamente duas casas; não há arredondamento automático nem suporte a precisão variável por moeda.
+- `REFUND` e `ROLLBACK` são reversões integrais: apenas uma reversão processada pode apontar diretamente para uma transação original. Não há suporte a estorno parcial.
+- Entrega de eventos é pelo menos uma vez. Um consumidor pode receber o mesmo `eventId` novamente e precisa deduplicar; não se promete entrega exactly-once.
+- A execução local cobre SQS por LocalStack. Provisionamento da policy IAM, configuração de TLS, gestão de secrets e hardening do Keycloak em produção ficam a cargo do ambiente de implantação.
+- Não foi implementado um teste integrado que envie SIGTERM ao serviço completo nem que reinicie PostgreSQL durante o processamento. O shutdown dos workers e a recuperação de leases são cobertos em testes de componentes, mas esses cenários ponta a ponta permanecem trabalho futuro.
+- A fila de eventos é única e standard, com roteamento por `eventType`; métricas são locais a cada processo e não são agregadas entre instâncias.
